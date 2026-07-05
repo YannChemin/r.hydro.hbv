@@ -66,7 +66,17 @@ int hbv_model(int n,int t,int b,float **p,float **po,float pcalt,float *dep,floa
 	}else{
 		qc[b][t] = MIN( ssw[b][t],qc[b][t] );
 	}
-	ssm[b][t+1] = ssm[b][t]+inp[b][t]-qd[b][t]-qin[b][t]+qc[b][t]-eta[b][t];
+	// unlike ssp/ssw just above, ssm was never clamped to >= 0 here --
+	// a negative ssm[b][t] then feeds pow(ssm[b][t]/fc[b][n],
+	// beta[b][n]) above (qin's formula) with a negative base and a
+	// non-integer (sampled) exponent, which is mathematically
+	// undefined and returns nan in C, permanently corrupting every
+	// subsequent timestep's state through this same recursion.
+	// Confirmed as the actual cause of a real nan run (343 of 916 days
+	// nan in one dataset=original ETout report) that guarding the
+	// lp[b][n]*fc[b][n] division in eta's formula, above, did not by
+	// itself fix.
+	ssm[b][t+1] = MAX(ssm[b][t]+inp[b][t]-qd[b][t]-qin[b][t]+qc[b][t]-eta[b][t], 0.);
 	//ground water balance (mm)
 	if(sgw[b][t] >= sgwmax){
 		sgw[b][t+1] = (1-ks[b][n])*sgw[b][t];
