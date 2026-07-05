@@ -1,0 +1,238 @@
+<h2>DESCRIPTION</h2>
+
+<em>r.hydro.hbv</em> implements the HBV (Hydrologiska Byrans
+Vattenbalansavdelning) conceptual rainfall-runoff model over one or more
+lumped sub-basins, run <b>n_realizations</b> times with randomly sampled
+parameter sets (Monte-Carlo/GLUE style uncertainty analysis), and reports
+Nash-Sutcliffe efficiency, relative volume error and related performance
+criteria per realization. The simulation loop over time steps and basins
+is parallelized with OpenMP.
+
+<p>
+This module generalizes what were originally two hand-forked, hard-coded
+C programs into a single, parametrized engine:
+
+<ul>
+<li>the original calibration from Lal Muthuwatta's PhD thesis (ITC, 2005),
+8 sub-basins of the Karkheh basin (Iran);</li>
+<li>a Monte-Carlo flood-risk study (11 SHYREG sub-basins) built for the
+Plumergat (Brittany, France) DICRIM municipal risk-information
+document.</li>
+</ul>
+
+Both are bundled as ready-to-run demonstrations via <b>dataset=original</b>
+and <b>dataset=dicrim</b>. Use <b>dataset=custom</b> (the default) to point
+the module at your own lumped-basin CSV inputs.
+
+<h2>INPUTS</h2>
+
+All time-series inputs are headerless CSV files, one row per day and one
+column per basin/station:
+
+<ul>
+<li><b>precipitation</b>: observed precipitation (mm/d)</li>
+<li><b>temperature</b>: observed mean temperature (deg C)</li>
+<li><b>evapotranspiration</b>: potential evapotranspiration (mm/d)</li>
+<li><b>eta_observed</b>: observed actual evapotranspiration used as a
+secondary calibration target (mm/d)</li>
+<li><b>discharge_observed</b>: observed discharge (m3/s)</li>
+</ul>
+
+<b>parameters</b> is a CSV with 22 rows and one column per basin: rows 0-15
+are paired low/high sampling bounds for the 8 free HBV parameters (fc,
+beta, lp, alpha, kf, ks, perc, cflux); row 16 is basin area (km2); rows
+17-18 are forest/field area fractions; rows 19-21 are elevation
+differences (per 100 m) between basin and station for precipitation,
+temperature and evapotranspiration.
+
+<p>
+<b>basin_ids</b> is an optional text file, one identifier per line, used to
+name the output files (<tt>Basin01</tt>, <tt>Basin02</tt>, ... if omitted).
+
+<h3>GRASS-native basin delineation (instead of <tt>parameters</tt>/<tt>basin_ids</tt>)</h3>
+
+In place of the "parameters" CSV and "basin_ids" text file, basin
+physiography and identifiers can come straight from a GRASS vector map
+instead of any file on disk:
+
+<ul>
+<li><b>elevation</b> + <b>outlets</b> (+ <b>id_column</b>,
+<b>threshold</b>, <b>snap_radius</b>, <b>landcover</b>,
+<b>forest_cats</b>, <b>basins_ffo</b>, <b>basins_ffi</b>,
+<b>precip_station_elevation</b>, <b>temp_station_elevation</b>,
+<b>et_station_elevation</b>, <b>parameters_template</b>,
+<b>hru_bands</b>, <b>basins</b>, <b>basins_vector</b>): r.hydro.hbv
+spawns <a href="r.hydro.hbv.basins.html">r.hydro.hbv.basins</a> itself
+to delineate the basins raster/vector and write physiography plus (via
+<b>parameters_template</b>, still a small CSV of just the 8 HBV
+parameters' sampling bounds -- these can't be derived from a DEM) the
+parameter bounds directly into <b>basins_vector</b>'s attribute table,
+then reads that table as this run's parameters input.
+<b>hru_bands</b> (default 1) splits each basin into that many
+elevation-band HRUs -- see "SEMI-DISTRIBUTED (HRU) MODE" below.</li>
+<li><b>basins_vector</b> alone (no elevation/outlets): reads an
+already-delineated basins vector -- e.g. one built by a previous
+<em>r.hydro.hbv.basins</em> or <em>r.hydro.hbv</em> run -- directly,
+skipping delineation.</li>
+</ul>
+
+<p>
+Either way, <b>n_basins</b> is not needed: the basin count comes from
+the number of populated rows in the vector's attribute table.
+
+<p>
+<b>dem_source</b> (+ optional <b>dem_area</b>) replaces <b>elevation</b>
+entirely: given together with <b>outlets</b>, r.hydro.hbv spawns
+<a href="r.in.dem.html">r.in.dem</a> itself to fetch a real DEM
+(Copernicus GLO-30/GLO-90, no account/API key needed, truly global land
+coverage) for the current region before delineating -- so any study
+area on Earth can be run against real terrain with no local elevation
+data prepared in advance.
+
+<h3>GRASS-native time-series I/O (instead of CSV)</h3>
+
+Each of <b>precipitation</b>/<b>temperature</b>/<b>evapotranspiration</b>/
+<b>eta_observed</b>/<b>discharge_observed</b> has a <tt>*_table=</tt>
+alternative (<tt>precipitation_table=</tt>, etc.; column names
+overridable via <tt>table_id_column=</tt>/<tt>table_date_column=</tt>/
+<tt>table_value_column=</tt>, default
+<tt>station_id</tt>/<tt>date</tt>/<tt>value</tt>): a long-format DB
+table, e.g. one built by
+<a href="r.hydro.hbv.forcing.html">r.hydro.hbv.forcing</a> from an
+ERA5-Land/MODIS STRDS via zonal means, instead of a CSV file.
+<b>n_days</b> isn't needed in that case either -- the day count comes
+from the tables' own date axis (every <tt>*_table</tt> input must
+resolve to exactly the same set of dates).
+
+<p>
+<b>output_tables</b>=<i>prefix</i> additionally writes the discharge/ETa
+results as <tt>&lt;prefix&gt;_basinout</tt>/<tt>&lt;prefix&gt;_etout</tt>
+GRASS DB tables (long format: <tt>station_id,day,qo,qr,po</tt> /
+<tt>station_id,day,eta,eto</tt>), alongside (not instead of) the CSV
+outputs below.
+
+<h3>Fetching precipitation/temperature/PET directly from ERA5</h3>
+
+<b>era5_start</b>/<b>era5_end</b> (<tt>YYYY-MM-DD</tt>, + optional
+<b>era5_area</b>/<b>era5_cache_dir</b>) replace <b>precipitation</b>/
+<b>temperature</b>/<b>evapotranspiration</b> (and their
+<tt>*_table</tt> equivalents) entirely: given together, r.hydro.hbv
+spawns <a href="t.in.era5.html">t.in.era5</a> once (fetching ERA5-Land,
+falling back to ERA5, for all three variables) and
+<a href="r.hydro.hbv.forcing.html">r.hydro.hbv.forcing</a> three times
+(zonal means against <b>basins</b>/<b>basins_vector</b>, both required
+in this mode) to build the same long-format tables the
+<tt>*_table=</tt> options expect -- no manual
+<em>t.in.era5</em>/<em>r.hydro.hbv.forcing</em> calls needed.
+<b>eta_observed</b>/<b>discharge_observed</b> are calibration targets
+(real gauge/remote-sensing observations), not meteorological forcing,
+so ERA5 has no equivalent for them -- they must still be given as CSV
+or <tt>*_table=</tt>, exactly as in every other mode.
+
+<h2>SEMI-DISTRIBUTED (HRU) MODE</h2>
+
+With <b>hru_bands</b> &gt; 1, each basin becomes several elevation-band
+HRUs (computation units, <tt>btot</tt> in the code), each independently
+simulated, but discharge is summed and ETa area-weighted-averaged back
+to the <b>reporting station</b> level (<tt>rtot</tt>, one per basin,
+matching observed data) before scoring and before writing
+<tt>Basinout</tt>/<tt>ETout</tt>. The <tt>Output</tt>/<tt>EToutput</tt>
+parameter-diagnostic files, however, only report each station's first
+(lowest-elevation-band) HRU as a representative draw, not every HRU
+individually -- a limitation of <em>hbv_performance.c</em>'s own
+per-station (not per-HRU) selection-counter bookkeeping, left
+unchanged; see <tt>docs/raster_options.md</tt> for detail.
+<b>hru_bands=1</b> (the default) is an exact no-op relative to the
+lumped, one-unit-per-basin behavior this module always had.
+
+<h2>OUTPUTS</h2>
+
+For every basin, four CSV files are written under <b>output</b>:
+
+<ul>
+<li><tt>Output&lt;NN&gt;-&lt;id&gt;.csv</tt>: selected ("behavioural") HBV
+parameter sets and their NS/NSH/NSL/RVE/RMAEH/RMAEL/REVE performance
+scores</li>
+<li><tt>Basinout&lt;NN&gt;-&lt;id&gt;.csv</tt>: observed discharge, simulated
+discharge and corrected precipitation time series (space-separated)</li>
+<li><tt>ETout&lt;NN&gt;-&lt;id&gt;.csv</tt>: simulated vs. observed actual
+evapotranspiration time series</li>
+<li><tt>EToutput&lt;NN&gt;-&lt;id&gt;.csv</tt>: selected parameter sets with
+NSET/RVEET (evapotranspiration-based) scores</li>
+</ul>
+
+<h2>EXAMPLES</h2>
+
+Run the bundled original Karkheh thesis dataset:
+
+<div class="code"><pre>
+r.hydro.hbv dataset=original output=/tmp/hbv_original -l
+</pre></div>
+
+(the <b>-l</b> legacy flag reproduces the original 2005 code's behavior
+exactly, including not resetting statistics accumulators between
+realizations)
+
+<p>
+Run the bundled Plumergat DICRIM dataset:
+
+<div class="code"><pre>
+r.hydro.hbv dataset=dicrim output=/tmp/hbv_dicrim
+</pre></div>
+
+Run against custom lumped-basin data:
+
+<div class="code"><pre>
+r.hydro.hbv dataset=custom \
+  precipitation=precip.csv temperature=temp.csv \
+  evapotranspiration=evap.csv eta_observed=etobs.csv \
+  discharge_observed=dischargeobs.csv parameters=param_sto.csv \
+  n_basins=4 n_calib_steps=1000 n_days=1000 n_years=3 warmup=100 \
+  n_realizations=1000 output=/tmp/hbv_custom
+</pre></div>
+
+Run against custom data with GRASS-native basin delineation instead of
+a "parameters" CSV (r.hydro.hbv spawns <em>r.hydro.hbv.basins</em> itself):
+
+<div class="code"><pre>
+g.region raster=dem
+r.hydro.hbv dataset=custom \
+  precipitation=precip.csv temperature=temp.csv \
+  evapotranspiration=evap.csv eta_observed=etobs.csv \
+  discharge_observed=dischargeobs.csv \
+  elevation=dem outlets=outlets id_column=ID threshold=1000 \
+  landcover=landcover forest_cats=1,2,3 \
+  parameters_template=hbv_param_bounds_16row.csv \
+  basins=basins basins_vector=basins_v \
+  n_calib_steps=1000 n_days=1000 n_years=3 warmup=100 \
+  n_realizations=1000 output=/tmp/hbv_custom
+</pre></div>
+
+<h2>NOTES ON EXTENDING TO RASTER INPUTS</h2>
+
+The current engine operates entirely on lumped, basin-averaged time
+series (no raster I/O). See <tt>docs/raster_options.md</tt> in the module
+source tree for a discussion of options to evolve toward
+semi-distributed or fully distributed (raster-cell-based) HBV, and a
+recommended incremental path.
+
+<h2>REFERENCES</h2>
+
+<ul>
+<li>Muthuwatta, L., 2005. <i>Calibration of a semi distributed
+hydrological model using discharge and remote sensing data.</i> PhD
+Thesis, ITC, The Netherlands.</li>
+<li>HBV hydrology model:
+<a href="https://en.wikipedia.org/wiki/HBV_hydrology_model">https://en.wikipedia.org/wiki/HBV_hydrology_model</a></li>
+</ul>
+
+<h2>SEE ALSO</h2>
+
+<em>
+<a href="r.watershed.html">r.watershed</a>,
+<a href="r.water.outlet.html">r.water.outlet</a>
+</em>
+
+<h2>AUTHOR</h2>
+
+Yann Chemin
