@@ -8,10 +8,8 @@
  *               (Muthuwatta, PhD thesis ITC 2005) dataset, the Plumergat
  *               DICRIM flood-risk dataset, or arbitrary lumped-basin CSV
  *               inputs following the same layout.
- * COPYRIGHT:    (C) 2026 by Yann Chemin, and the GRASS Development Team
- *               This program is free software under the GNU General
- *               Public License (>=v2). Read the file COPYING that comes
- *               with GRASS for details.
+ * COPYRIGHT:    (C) 2026 by Yann Chemin
+ *               Released into the public domain -- see LICENSE (Unlicense).
  *
  ****************************************************************************/
 #include <stdio.h>
