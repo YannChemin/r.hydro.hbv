@@ -220,3 +220,33 @@ the larger 11-basin/8400-day/45000-realization DICRIM arrays. Fixed by
 clamping `minVal` to `>= 0`; this only affects `qdo`/`qdr`/`dqd`
 (discharge-deficit diagnostics, not written to any of the report CSVs),
 not the discharge/ET time series themselves.
+
+## Noted for later: `r.in.landcover`
+
+`r.hydro.hbv.basins`' `landcover=`/`forest_cats=` options (for the
+`ffo`/`ffi` forest/field-fraction physiography terms) currently require
+the caller to already have a local land-cover raster -- there's no
+equivalent of `r.in.dem`/`t.in.era5` (real, no-account-needed global
+data fetched directly for the current region) for land cover yet.
+
+**ESA WorldCover 10m 2021 (v200)** is a real, no-auth candidate,
+confirmed reachable the same way the Copernicus DEM bucket was: plain
+HTTPS, no signed S3 request, public AWS Open Data bucket at
+`esa-worldcover.s3.eu-central-1.amazonaws.com`, 3x3-degree COG tiles
+named e.g. `ESA_WorldCover_10m_2021_v200_N33E048_Map.tif` (tile ID =
+south-west corner, snapped to multiples of 3 degrees -- a different
+grid from the Copernicus DEM's 1-degree tiles, so the tiling logic
+needs its own implementation, not a reuse of `r.in.dem`'s). Class 10
+("Tree cover") is the natural `forest_cats=` value. Categorical data,
+so any resampling must be nearest-neighbour, never bilinear/cubic --
+unlike a continuous DEM, averaging land-cover class codes produces
+meaningless values.
+
+A throwaway version of this fetch-and-warp logic (same overview-based
+fast-warp technique as `r.in.dem`'s default path) was written and
+verified working for the `iran_karkheh_fetch_landcover.py` demo script
+in `$HOME/grassdata` (4 tiles, ~5s for the whole Karkheh region) but
+not turned into a proper standalone addon -- that's the follow-up this
+note is for, mirroring `r.in.dem`'s structure (`source=`/`area=`/
+`cache_dir=`/native-vs-region-resolution flag) but for WorldCover's
+3-degree grid and nearest-neighbour-only resampling.

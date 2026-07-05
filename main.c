@@ -57,7 +57,15 @@ static char *tempfile_with_suffix(const char *suffix) {
 }
 
 static char *bundled_data_path(const char *dataset, const char *fname) {
-	const char *base = G_gisbase();
+	/* Addon etc/ files install under GRASS_ADDON_BASE (e.g.
+	 * $HOME/.grass8/addons), not G_gisbase()'s system GISBASE -- using
+	 * G_gisbase() here always missed the bundled data once this module
+	 * was installed as an addon (as opposed to built into GRASS
+	 * itself), since nothing is ever installed at
+	 * $GISBASE/etc/r.hydro.hbv for an addon. */
+	const char *base = getenv("GRASS_ADDON_BASE");
+	if (!base)
+		base = G_gisbase();
 	char etcdir[GPATH_MAX];
 	snprintf(etcdir, sizeof(etcdir), "%s/etc/%s/data/%s", base, PGMNAME,
 		 dataset);
