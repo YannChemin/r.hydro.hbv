@@ -250,3 +250,44 @@ not turned into a proper standalone addon -- that's the follow-up this
 note is for, mirroring `r.in.dem`'s structure (`source=`/`area=`/
 `cache_dir=`/native-vs-region-resolution flag) but for WorldCover's
 3-degree grid and nearest-neighbour-only resampling.
+
+## Noted for later: harden `hbv_model.c` against `lp=0` (and similar) edge cases
+
+Discovered while building the Iran_Karkheh demo project (`$HOME/grassdata/
+run_iran_karkheh.sh` + `iran_karkheh_plots.py`): `dataset=original`'s own
+bundled parameter bounds (`data/original/param_sto.csv`) set the `lp`
+parameter's lower bound to exactly `0.0` for several sub-basins, and
+Monte-Carlo sampling can and does draw `lp = 0`. `hbv_model.c`'s actual-ET
+term,
+
+```c
+eta[b][t] = MIN(etp[b][t], (etp[b][t]*ssm[b][t] / (lp[b][n]*fc[b][n])));
+```
+
+divides by `lp[b][n]*fc[b][n]`, which is `0` whenever `lp = 0` (regardless
+of `fc`) -- producing `inf`/`nan` for that timestep. Since `ssm[b][t+1]`
+is updated from `eta[b][t]` (`hbv_model.c`'s water-balance recursion),
+a single `nan` day propagates forward and can corrupt the rest of that
+realization's state, not just one row. Confirmed via `ETout01-Doab.csv`
+from a real `dataset=original` run: 343 of 916 days came back `nan` in
+the simulated-ETa column, and for several sub-basins (Pole_Chehr,
+Doabe_M, Ghor_B, Holilan in one such run) *every* reported day was
+`nan`, presumably because the specific realization selected for the
+final report happened to have drawn `lp = 0`.
+
+This wasn't fixed in that session (`hbv_model.c` was intentionally kept
+untouched throughout the GRASS-integration and raster-native work
+described above) -- `iran_karkheh_plots.py`'s `nash_sutcliffe()` was
+instead made robust to it (masks `nan` days out of the score rather than
+letting them propagate into the whole statistic), which is a reasonable
+plotting-side mitigation but not a fix for the underlying engine
+behavior. The real fix belongs in `hbv_model.c` itself -- e.g. clamping
+`lp` away from exactly `0` at the point of sampling (`main.c`, where
+`lp[b][n]` is drawn from its prior bounds), or guarding the division in
+`hbv_model.c` directly (e.g. treat `lp*fc <= 0` as `eta = 0` or
+`eta = etp`, whichever is the hydrologically correct boundary case --
+worth checking against the original HBV-96 formulation, Lindström et al.
+1997, rather than guessing). Either fix should be checked against
+`test_original.py`/`test_dicrim.py` for behavior changes, since both
+bundled datasets' parameter bounds allow `lp = 0` and any observed
+`nan`-day counts in their existing reference outputs would change.
