@@ -251,7 +251,7 @@ note is for, mirroring `r.in.dem`'s structure (`source=`/`area=`/
 `cache_dir=`/native-vs-region-resolution flag) but for WorldCover's
 3-degree grid and nearest-neighbour-only resampling.
 
-## Noted for later: harden `hbv_model.c` against `lp=0` (and similar) edge cases
+## Fixed: `hbv_model.c` hardened against `lp=0`/`fc=0` (and a related `ssm<0` bug)
 
 Discovered while building the Iran_Karkheh demo project (`$HOME/grassdata/
 run_iran_karkheh.sh` + `iran_karkheh_plots.py`): `dataset=original`'s own
