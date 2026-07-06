@@ -275,19 +275,63 @@ Doabe_M, Ghor_B, Holilan in one such run) *every* reported day was
 `nan`, presumably because the specific realization selected for the
 final report happened to have drawn `lp = 0`.
 
-This wasn't fixed in that session (`hbv_model.c` was intentionally kept
-untouched throughout the GRASS-integration and raster-native work
-described above) -- `iran_karkheh_plots.py`'s `nash_sutcliffe()` was
-instead made robust to it (masks `nan` days out of the score rather than
-letting them propagate into the whole statistic), which is a reasonable
-plotting-side mitigation but not a fix for the underlying engine
-behavior. The real fix belongs in `hbv_model.c` itself -- e.g. clamping
-`lp` away from exactly `0` at the point of sampling (`main.c`, where
-`lp[b][n]` is drawn from its prior bounds), or guarding the division in
-`hbv_model.c` directly (e.g. treat `lp*fc <= 0` as `eta = 0` or
-`eta = etp`, whichever is the hydrologically correct boundary case --
-worth checking against the original HBV-96 formulation, Lindström et al.
-1997, rather than guessing). Either fix should be checked against
-`test_original.py`/`test_dicrim.py` for behavior changes, since both
-bundled datasets' parameter bounds allow `lp = 0` and any observed
-`nan`-day counts in their existing reference outputs would change.
+This was left as a note (not fixed) in the session that built the
+Iran_Karkheh demo, since `hbv_model.c` was intentionally kept untouched
+throughout the GRASS-integration and raster-native work described
+above. A follow-up session did fix it, in `hbv_model.c` directly (not
+by clamping `lp` at the sampling point in `main.c`):
+
+- `eta`'s division guard: `lp[b][n]*fc[b][n] <= 0` now sets
+  `eta = etp` when `ssm > 0` (the correct mathematical limit of
+  `etp*ssm/(lp*fc)` as `lp*fc -> 0+`) or `eta = 0` when `ssm` is also
+  `0` (no moisture to evaporate), instead of dividing by zero.
+  `qin`/`qc`'s own `fc[b][n]` divisions got the same `fc <= 0` guard,
+  for the same reason (`fc`'s bundled bounds never actually reach `0`
+  in `dataset=original`/`dicrim`, but a `dataset=custom` caller's own
+  bounds could).
+- A second, more consequential bug found while verifying the above
+  fix *didn't* actually eliminate the observed `nan`-day counts on its
+  own: unlike `ssp`/`ssw` just above it in the same function, `ssm`
+  (soil moisture) was never clamped to `>= 0` after its own update.
+  A negative `ssm[b][t]` then feeds `pow(ssm[b][t]/fc[b][n],
+  beta[b][n])` (`qin`'s formula, just above `eta`'s) with a negative
+  base and a non-integer (sampled) exponent -- mathematically
+  undefined, and `nan` in C -- which then corrupts every subsequent
+  timestep through the same `ssm[b][t+1]` recursion. This, not the
+  `lp*fc` division, turned out to be the actual source of the
+  343-of-916-day `nan` run originally reported: clamping `ssm[b][t+1]`
+  to `>= 0` (matching `ssp`/`ssw`'s existing pattern) eliminated it
+  completely, confirmed by rerunning the same `dataset=original`
+  scenario with `n_realizations=1000` and checking every one of the 8
+  sub-basins' `ETout` files for `nan` (none found, where several had
+  been entirely `nan` before).
+
+Both bundled datasets' golden-fixture reference outputs
+(`testsuite/data/original_reference/`) needed regenerating after this
+change, since it's a genuine, intended behavior change (removing
+`nan`-producing undefined behavior necessarily changes the numbers
+downstream of it) -- `test_original.py` was failing against the stale
+fixture for exactly this reason until the fixture was regenerated and
+re-verified `nan`-free.
+
+This fix also had a second-order effect on
+`testsuite/test_table_io.py`: that test used to diff two full model
+runs' (CSV-input vs. table-input) output for bit-for-bit equality, and
+passed, because both runs' `ssm` happened to hit the same undefined
+(`nan`) behavior at the same points regardless of which forcing path
+was used -- coincidental agreement on `nan`, not a meaningful
+equivalence check. With `ssm` now correctly clamped instead of going
+`nan`, a *tiny* forcing difference between the two paths (the
+precipitation table is round-tripped through a raster and
+`r.hydro.hbv.forcing`'s zonal mean, not guaranteed bit-exact) can land
+one run's `ssm` on the positive side of the clamp and the other's on
+the negative (now-clamped-to-zero) side, and the two runs' soil
+moisture can settle into qualitatively different regimes for the rest
+of a short synthetic series. Confirmed to be about the comparison,
+not either forcing path: `table_input.c`'s own parsing/pivoting logic
+reproduces the source data correctly (verified directly, at the data
+level, table row by table row). `test_table_io.py` was restructured
+accordingly -- it now checks each table's contents against the
+original synthetic values directly, and (separately) that the
+table-input path's end-to-end output is well-formed, rather than
+diffing two independently-computed runs' output against each other.
