@@ -243,8 +243,9 @@ class TestTableIO(TestCase):
         os.makedirs(self.table_out, exist_ok=True)
 
     def tearDown(self):
-        shutil.rmtree(self.csv_out, ignore_errors=True)
-        shutil.rmtree(self.table_out, ignore_errors=True)
+        pass  # TEMP: debugging, restore rmtree after
+        # shutil.rmtree(self.csv_out, ignore_errors=True)
+        # shutil.rmtree(self.table_out, ignore_errors=True)
 
     def test_table_inputs_match_csv_inputs(self):
         self.assertModule(
