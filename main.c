@@ -804,13 +804,28 @@ int main(int argc, char *argv[]) {
 
 	if ((!precip_path && !opt_precip_table->answer) ||
 	    (!temp_path && !opt_temp_table->answer) ||
-	    (!evap_path && !opt_evap_table->answer) ||
-	    (!eta_obs_path && !opt_eta_obs_table->answer) ||
-	    (!q_obs_path && !opt_q_obs_table->answer))
+	    (!evap_path && !opt_evap_table->answer))
 		G_fatal_error(
-		    _("precipitation/temperature/evapotranspiration/"
-		      "eta_observed/discharge_observed (or their _table "
-		      "equivalents) are required when dataset=custom"));
+		    _("precipitation/temperature/evapotranspiration (or "
+		      "their _table equivalents) are required when "
+		      "dataset=custom"));
+
+	/* eta_observed/discharge_observed are calibration targets, not
+	 * simulation inputs -- omitting both is a supported "pure
+	 * simulation" mode (no real gauge/ETa records available yet):
+	 * hbv_performance()'s NS/RVE/... scoring runs against zero-filled
+	 * placeholders below instead of crashing on readcsv(NULL), and its
+	 * output columns are meaningless in that case, but qr_station (the
+	 * actual simulated discharge hbv_report() writes out) is entirely
+	 * unaffected by qo/eto content. */
+	int have_discharge_obs = q_obs_path || opt_q_obs_table->answer;
+	int have_eta_obs = eta_obs_path || opt_eta_obs_table->answer;
+	if (!have_discharge_obs || !have_eta_obs)
+		G_warning(_("No discharge_observed/eta_observed given -- "
+			    "running in pure-simulation mode: NS/RVE/RMAE/"
+			    "REVE performance columns in the output will not "
+			    "be meaningful, but simulated discharge/ETa are "
+			    "still written normally"));
 
 	if (!use_vector_basins) {
 		/* legacy path: basin physiography/parameter bounds and basin
@@ -1030,12 +1045,33 @@ int main(int argc, char *argv[]) {
 		po_station = readcsv(precip_path, rtot, dtot);
 	if (!etpo_station)
 		etpo_station = readcsv(evap_path, rtot, dtot);
-	if (!qo)
-		qo = readcsv(q_obs_path, rtot, dtot);
+	if (!qo) {
+		/* no discharge_observed[_table] given -- pure-simulation
+		 * mode (see the G_warning above); zero-filled placeholder
+		 * instead of readcsv(NULL, ...), which would crash */
+		if (q_obs_path)
+			qo = readcsv(q_obs_path, rtot, dtot);
+		else {
+			int i, j;
+			qo = af2d(rtot, dtot);
+			for (i = 0; i < rtot; i++)
+				for (j = 0; j < dtot; j++)
+					qo[i][j] = 0.;
+		}
+	}
 	if (!tm_station)
 		tm_station = readcsv(temp_path, rtot, dtot);
-	if (!eto)
-		eto = readcsv(eta_obs_path, rtot, dtot);
+	if (!eto) {
+		if (eta_obs_path)
+			eto = readcsv(eta_obs_path, rtot, dtot);
+		else {
+			int i, j;
+			eto = af2d(rtot, dtot);
+			for (i = 0; i < rtot; i++)
+				for (j = 0; j < dtot; j++)
+					eto[i][j] = 0.;
+		}
+	}
 
 	/* expand station-level forcing to HRU width -- each HRU reuses its
 	 * parent station's time series (hbv_model.c already applies each
