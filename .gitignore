@@ -1,0 +1,4 @@
+OBJ.*/
+*.o
+*.tmp.html
+bin/
